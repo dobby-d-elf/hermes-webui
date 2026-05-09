@@ -1566,7 +1566,17 @@ function _kanbanLinksHtml(links){
 async function createKanbanTask(){
   const input = document.getElementById('kanbanNewTaskTitle');
   const title = input ? input.value.trim() : '';
-  if (!title) return;
+  if (!title) {
+    // Header "+" button (and empty inline submit) — focus + scroll the inline input
+    // so the user sees where to type. Without this, the header "+" button looked dead
+    // when the inline input was scrolled out of view below the filter stack.
+    if (input) {
+      try { input.scrollIntoView({behavior: 'smooth', block: 'center'}); } catch(_) {}
+      try { input.focus({preventScroll: true}); } catch(_) { input.focus(); }
+      input.select();
+    }
+    return;
+  }
   try {
     const created = await api('/api/kanban/tasks' + _kanbanBoardQuery(), {
       method: 'POST',

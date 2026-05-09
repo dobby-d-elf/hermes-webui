@@ -80,6 +80,43 @@ def test_kanban_write_mvp_has_native_controls_and_api_calls():
     assert "kanban-comment-form" in PANELS
 
 
+def test_kanban_new_task_header_button_focuses_inline_input_when_empty():
+    """Regression: the panel-head '+' button is wired to createKanbanTask(), which
+    reads the inline #kanbanNewTaskTitle input. When empty, the function used to
+    silently `return` (no toast, no focus, no scroll), so the header button looked
+    completely dead — exactly the symptom Nathan reported on May 9 2026.
+
+    Now an empty title must scroll the inline input into view, focus it, and
+    select() any existing text. The earliest exit happens AFTER that affordance.
+    """
+    # createKanbanTask body, normalized to whitespace-collapsed string
+    m = re.search(
+        r"async function createKanbanTask\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert m, "createKanbanTask() not found in panels.js"
+    body = m.group(1)
+    compact_body = re.sub(r"\s+", "", body)
+    # Empty-title branch must include a scrollIntoView + focus + select on the input,
+    # not just a bare `return`.
+    assert "scrollIntoView" in compact_body, (
+        "createKanbanTask() must scroll the inline input into view when empty — "
+        "otherwise the panel-head '+' button looks dead with no inline input visible."
+    )
+    assert "input.focus(" in compact_body, (
+        "createKanbanTask() must focus the inline input when empty."
+    )
+    assert "input.select()" in compact_body, (
+        "createKanbanTask() must select() existing input text when empty."
+    )
+    # Belt-and-suspenders: the panel-head button still wires to createKanbanTask()
+    # (it's not a separate handler — the same function services both entry points).
+    assert 'id="kanbanNewTaskBtn"' in INDEX
+    btn_html = INDEX[INDEX.find('id="kanbanNewTaskBtn"'):]
+    btn_html = btn_html[: btn_html.find("</button>") + len("</button>")]
+    assert 'onclick="createKanbanTask()"' in btn_html
+
+
+
 def test_kanban_board_has_native_css_classes():
     for selector in (
         ".kanban-board",

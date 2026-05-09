@@ -1,5 +1,11 @@
 # Hermes Web UI -- Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **bug(kanban): Kanban panel header `+` button looked dead** ([#1964](https://github.com/nesquena/hermes-webui/issues/1964)). The "New task" button at the top of the Kanban sidebar panel was wired to `createKanbanTask()`, which silently `return`s when the inline `#kanbanNewTaskTitle` input is empty. Because that input lives below five rows of filters (search, assignee, tenant, archived/mine toggles, stats, bulk-action bar), it's typically off-screen on first open — clicking the obvious header `+` did nothing visible. Now an empty title scrolls the inline input into view, focuses it, and selects any existing text. Adds a regression test (`tests/test_kanban_ui_static.py::test_kanban_new_task_header_button_focuses_inline_input_when_empty`).
+
 ## [v0.51.30] — 2026-05-08 — 3-PR contributor batch (Release G: offline recovery + PWA hardening + opt-in session jump buttons + opt-in endless-scroll)
 
 ### Added (3 PRs, all from @ai-ag2026)
