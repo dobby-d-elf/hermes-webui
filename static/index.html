@@ -146,7 +146,7 @@
       <div class="panel-head">
         <span data-i18n="tab_kanban">Kanban</span>
         <div class="panel-head-actions">
-          <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="kanbanNewTaskBtn" onclick="createKanbanTask()" data-tooltip="New task" data-i18n-title="kanban_new_task" aria-label="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="kanbanNewTaskBtn" onclick="openKanbanCreate()" data-tooltip="New task" data-i18n-title="kanban_new_task" aria-label="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
           <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="kanbanRefreshBtn" onclick="loadKanban(true)" data-tooltip="Refresh" data-i18n-title="kanban_refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
         </div>
       </div>
@@ -160,7 +160,8 @@
         <div id="kanbanBulkBar" class="kanban-bulk-bar">
           <select id="kanbanBulkStatus" aria-label="Bulk status"><option value="">Status</option><option value="ready">Ready</option><option value="blocked">Blocked</option><option value="done">Done</option><option value="archived">Archived</option></select>
           <button class="btn secondary" onclick="bulkUpdateKanban()" data-i18n="kanban_bulk_action">Bulk action</button>
-          <button class="btn secondary" onclick="nudgeKanbanDispatcher()" data-i18n="kanban_nudge_dispatcher">Preview dispatcher</button>
+          <button class="btn secondary" onclick="nudgeKanbanDispatcher()" data-i18n="kanban_nudge_dispatcher" title="Dry-run: shows what would be claimed without spawning workers">Preview</button>
+          <button class="btn primary" onclick="runKanbanDispatcher()" data-i18n="kanban_run_dispatcher" title="Claims Ready tasks and spawns worker subprocesses">Run dispatcher</button>
         </div>
         <div class="kanban-new-task-row">
           <input id="kanbanNewTaskTitle" placeholder="New task" data-i18n-placeholder="kanban_new_task" onkeydown="if(event.key==='Enter')createKanbanTask()">
@@ -718,7 +719,8 @@
         </div>
         <div class="main-view-actions">
           <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="btnKanbanCreateBoard" onclick="openKanbanCreateBoard()" data-tooltip="New board" data-i18n-title="kanban_new_board" aria-label="New board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="17.5" y1="14" x2="17.5" y2="21"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg></button>
-          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="nudgeKanbanDispatcher()" data-tooltip="Preview dispatcher" data-i18n-title="kanban_nudge_dispatcher" aria-label="Preview dispatcher">▶</button>
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="btnKanbanPreviewDispatcher" onclick="nudgeKanbanDispatcher()" data-tooltip="Preview dispatcher (dry-run)" data-i18n-title="kanban_nudge_dispatcher" aria-label="Preview dispatcher (dry-run)">▶</button>
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom kanban-run-dispatch-btn" id="btnKanbanRunDispatcher" onclick="runKanbanDispatcher()" data-tooltip="Run dispatcher — claim Ready tasks" data-i18n-title="kanban_run_dispatcher" aria-label="Run dispatcher"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></button>
         </div>
       </div>
       <div class="kanban-task-preview" id="kanbanTaskPreview" style="display:none"></div>
@@ -1259,6 +1261,51 @@
     <div class="kanban-modal-actions">
       <button type="button" class="btn secondary" onclick="closeKanbanBoardModal()" data-i18n="cancel">Cancel</button>
       <button type="button" class="btn primary" id="kanbanBoardModalSubmit" onclick="submitKanbanBoardModal()" data-i18n="save">Save</button>
+    </div>
+  </div>
+</div>
+<!-- Kanban: create-task modal — same overlay pattern as the create-board modal above. -->
+<div class="kanban-modal-overlay" id="kanbanTaskModal" hidden onclick="if(event.target===this)closeKanbanTaskModal()">
+  <div class="kanban-modal" role="dialog" aria-modal="true" aria-labelledby="kanbanTaskModalTitle">
+    <h3 id="kanbanTaskModalTitle" data-i18n="kanban_new_task">New task</h3>
+    <div class="kanban-modal-row">
+      <label for="kanbanTaskModalTitleInput" data-i18n="kanban_title">Title</label>
+      <input type="text" id="kanbanTaskModalTitleInput" maxlength="500" autocomplete="off" required>
+    </div>
+    <div class="kanban-modal-row">
+      <label for="kanbanTaskModalBody" data-i18n="kanban_description">Description</label>
+      <textarea id="kanbanTaskModalBody" rows="4" data-i18n-placeholder="kanban_description_placeholder" placeholder="Optional — what needs to happen, acceptance criteria, links"></textarea>
+    </div>
+    <div class="kanban-modal-row-inline">
+      <div class="kanban-modal-row">
+        <label for="kanbanTaskModalStatus" data-i18n="kanban_status">Status</label>
+        <select id="kanbanTaskModalStatus">
+          <option value="triage" data-i18n="kanban_status_triage">Triage</option>
+          <option value="todo" data-i18n="kanban_status_todo">Todo</option>
+          <option value="ready" data-i18n="kanban_status_ready">Ready</option>
+        </select>
+      </div>
+      <div class="kanban-modal-row">
+        <label for="kanbanTaskModalPriority" data-i18n="kanban_priority">Priority</label>
+        <input type="number" id="kanbanTaskModalPriority" value="0" min="-100" max="100" step="1">
+      </div>
+    </div>
+    <div class="kanban-modal-row">
+      <label for="kanbanTaskModalAssignee" data-i18n="kanban_assignee">Assignee</label>
+      <select id="kanbanTaskModalAssignee">
+        <!-- Options populated by _kanbanPopulateAssigneeSelect() at modal open time. -->
+      </select>
+      <div class="kanban-modal-hint" id="kanbanTaskModalAssigneeHint" data-i18n="kanban_assignee_hint">Pick a Hermes profile so the dispatcher can claim and run this task. Tasks left as <em>Unassigned</em> will sit in Ready forever.</div>
+    </div>
+    <div class="kanban-modal-row">
+      <label for="kanbanTaskModalTenant" data-i18n="kanban_tenant">Tenant</label>
+      <input type="text" id="kanbanTaskModalTenant" list="kanbanTaskModalTenantList" maxlength="64" autocomplete="off" data-i18n-placeholder="kanban_tenant_placeholder" placeholder="Optional — project or team slug">
+      <datalist id="kanbanTaskModalTenantList"></datalist>
+    </div>
+    <div class="kanban-modal-error" id="kanbanTaskModalError" aria-live="polite"></div>
+    <div class="kanban-modal-actions">
+      <button type="button" class="btn secondary" onclick="closeKanbanTaskModal()" data-i18n="cancel">Cancel</button>
+      <button type="button" class="btn primary" id="kanbanTaskModalSubmit" onclick="submitKanbanTaskModal()" data-i18n="create">Create</button>
     </div>
   </div>
 </div>

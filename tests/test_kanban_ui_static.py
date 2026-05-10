@@ -80,6 +80,340 @@ def test_kanban_write_mvp_has_native_controls_and_api_calls():
     assert "kanban-comment-form" in PANELS
 
 
+def test_kanban_new_task_header_button_opens_modal():
+    """Regression: the panel-head '+' button must open a real `.kanban-modal-overlay`
+    create-task modal (matching the existing create-board modal pattern in the same
+    file) — NOT silently return when the inline #kanbanNewTaskTitle input is empty.
+
+    Previously the header button was wired straight to createKanbanTask(), which
+    silently early-exits on empty title — the button looked completely dead.
+    Now the header button calls openKanbanCreate(), which opens the
+    #kanbanTaskModal overlay with title / description / status / priority /
+    assignee / tenant fields.
+    """
+    # 1. Header "+" button is wired to openKanbanCreate(), NOT createKanbanTask().
+    assert 'id="kanbanNewTaskBtn"' in INDEX
+    btn_html = INDEX[INDEX.find('id="kanbanNewTaskBtn"'):]
+    btn_html = btn_html[: btn_html.find("</button>") + len("</button>")]
+    assert 'onclick="openKanbanCreate()"' in btn_html, (
+        "Panel-head '+' button must call openKanbanCreate() (modal), not "
+        "createKanbanTask() directly (which silently returns on empty title)."
+    )
+
+    # 2. The create-task modal markup exists in index.html, with all the field
+    #    ids the JS / API contract expects.
+    assert 'id="kanbanTaskModal"' in INDEX
+    assert 'class="kanban-modal-overlay"' in INDEX[INDEX.find('id="kanbanTaskModal"') - 80:]
+    for field_id in (
+        "kanbanTaskModalTitleInput",
+        "kanbanTaskModalBody",
+        "kanbanTaskModalStatus",
+        "kanbanTaskModalPriority",
+        "kanbanTaskModalAssignee",
+        "kanbanTaskModalTenant",
+        "kanbanTaskModalError",
+        "kanbanTaskModalSubmit",
+    ):
+        assert f'id="{field_id}"' in INDEX, f"create-task modal missing #{field_id}"
+
+    # 3. Modal closes via Cancel button AND backdrop click AND ESC.
+    assert 'onclick="closeKanbanTaskModal()"' in INDEX
+    assert "if(event.target===this)closeKanbanTaskModal()" in INDEX
+
+    # 4. openKanbanCreate() unhides the modal, focuses the title field, populates
+    #    assignee/tenant datalists, binds keydown listener.
+    assert "function openKanbanCreate()" in PANELS
+    open_fn = re.search(
+        r"function openKanbanCreate\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert open_fn, "openKanbanCreate() not found"
+    body = open_fn.group(1)
+    assert "modal.hidden = false" in body
+    # Assignee is now a <select> populated from /api/profiles + board history,
+    # tenant is still a free-text <input> backed by a datalist.
+    assert "_kanbanPopulateAssigneeSelect" in body, (
+        "openKanbanCreate must populate the assignee <select> from /api/profiles."
+    )
+    assert "_kanbanPopulateTenantDatalist" in body
+    assert "_kanbanTaskModalKey" in body  # ESC + Enter handler attached
+
+    # 5. closeKanbanTaskModal() hides the modal and unbinds the listener.
+    assert "function closeKanbanTaskModal()" in PANELS
+    close_fn = re.search(
+        r"function closeKanbanTaskModal\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert close_fn and "modal.hidden = true" in close_fn.group(1)
+    assert "removeEventListener('keydown', _kanbanTaskModalKey)" in close_fn.group(1)
+
+    # 6. ESC closes; Enter submits (except in the description textarea).
+    assert "function _kanbanTaskModalKey" in PANELS
+    key_fn = re.search(
+        r"function _kanbanTaskModalKey\([^)]*\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert key_fn
+    key_body = key_fn.group(1)
+    assert "ev.key === 'Escape'" in key_body
+    assert "ev.key === 'Enter'" in key_body
+    assert "TEXTAREA" in key_body  # textarea exception preserved
+
+    # 7. submitKanbanTaskModal() POSTs to /api/kanban/tasks, closes modal,
+    #    reloads board, opens detail.
+    assert "async function submitKanbanTaskModal()" in PANELS
+    submit_fn = re.search(
+        r"async function submitKanbanTaskModal\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert submit_fn, "submitKanbanTaskModal() not found"
+    submit_body = submit_fn.group(1)
+    assert "api('/api/kanban/tasks'" in submit_body
+    assert "method: 'POST'" in submit_body
+    assert "JSON.stringify(payload)" in submit_body
+    assert "closeKanbanTaskModal()" in submit_body
+    assert "loadKanban(true)" in submit_body
+    assert "loadKanbanTask" in submit_body
+
+    # 8. Inline quick-add still works for power-users — typing a title + Enter
+    #    creates immediately. Empty submit falls through to the modal.
+    assert "async function createKanbanTask()" in PANELS
+    quick_add = re.search(
+        r"async function createKanbanTask\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert quick_add
+    qa_body = quick_add.group(1)
+    assert "openKanbanCreate()" in qa_body, (
+        "Empty inline-input submit must open the modal, not silently return."
+    )
+    assert "api('/api/kanban/tasks'" in qa_body
+
+
+def test_kanban_task_detail_has_edit_button_and_modal_supports_edit_mode():
+    """The Kanban task detail view must surface an Edit button — the previous
+    detail view exposed only status-transition buttons (Triage/Todo/Ready/...),
+    Block/Unblock, and Add comment, with no way to edit the title, body,
+    assignee, tenant, or priority of a task once created.
+
+    Backend supports it (PATCH /api/kanban/tasks/<id> with title/body/assignee/
+    tenant/priority — see _patch_task in api/kanban_bridge.py); this regression
+    pins the UI surface.
+    """
+    # 1. _kanbanRenderTaskDetail emits an Edit button wired to openKanbanEdit.
+    render_match = re.search(
+        r"function _kanbanRenderTaskDetail\(data\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert render_match, "_kanbanRenderTaskDetail() not found"
+    render_body = render_match.group(1)
+    assert 'class="kanban-edit-btn"' in render_body or "kanban-edit-btn" in render_body, (
+        "Task detail view must include the Edit button (.kanban-edit-btn)."
+    )
+    assert "openKanbanEdit(" in render_body, (
+        "Edit button must invoke openKanbanEdit(taskId)."
+    )
+
+    # 2. openKanbanEdit() exists and pre-fills the modal from a fetched task.
+    open_edit_match = re.search(
+        r"async function openKanbanEdit\([^)]*\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert open_edit_match, "openKanbanEdit() not found"
+    open_edit_body = open_edit_match.group(1)
+    assert "/api/kanban/tasks/" in open_edit_body
+    assert "_kanbanTaskModalMode = 'edit'" in open_edit_body
+    assert "_kanbanTaskModalEditingId = task.id" in open_edit_body
+
+    # 3. submitKanbanTaskModal branches to PATCH for edit, POST for create.
+    submit_match = re.search(
+        r"async function submitKanbanTaskModal\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert submit_match
+    submit_body = submit_match.group(1)
+    assert "method: 'PATCH'" in submit_body, (
+        "submitKanbanTaskModal must PATCH /api/kanban/tasks/<id> in edit mode."
+    )
+    assert "method: 'POST'" in submit_body, "Create path still POSTs."
+    assert "_kanbanTaskModalEditingId" in submit_body
+    # Edit-mode title-bar / button labels.
+    assert "kanban_edit_task" in PANELS
+    label_match = re.search(
+        r"function _kanbanSetTaskModalLabels\([^)]*\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert label_match and "edit" in label_match.group(1)
+
+
+def test_kanban_edit_mode_preserves_status_when_dropdown_untouched():
+    """Regression: editing a task whose real status is non-editable in the
+    modal's status dropdown (running/blocked/done/archived → mapped to
+    'triage' for display) must NOT silently demote the task on save.
+
+    The dropdown only offers triage/todo/ready, so `_kanbanEditableStatusFor`
+    maps any other status to 'triage' for display.  If the user just edits
+    the title and saves, the dropdown's 'triage' default would land in the
+    PATCH payload and the backend would call `_set_status_direct` which
+    reclaims any active worker and demotes the task.
+
+    Fix: track the displayed default in `_kanbanTaskModalInitialDisplayedStatus`
+    and only include `status` in the PATCH payload when the user actually
+    picked a different value.
+    """
+    # 1. The tracking variable is declared at module scope.
+    assert "_kanbanTaskModalInitialDisplayedStatus" in PANELS, (
+        "Edit-mode status preservation requires tracking the initial displayed "
+        "status so submit can detect whether the user actually changed it."
+    )
+
+    # 2. openKanbanEdit captures the initial displayed status from the task.
+    open_edit_match = re.search(
+        r"async function openKanbanEdit\([^)]*\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert open_edit_match, "openKanbanEdit() not found"
+    open_edit_body = open_edit_match.group(1)
+    assert "_kanbanTaskModalInitialDisplayedStatus" in open_edit_body, (
+        "openKanbanEdit must record the initial displayed status."
+    )
+    assert "_kanbanEditableStatusFor(task.status)" in open_edit_body
+
+    # 3. Submit's edit branch only sends status when it differs from the
+    #    initial displayed value.
+    submit_match = re.search(
+        r"async function submitKanbanTaskModal\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert submit_match
+    submit_body = submit_match.group(1)
+    assert "statusVal !== _kanbanTaskModalInitialDisplayedStatus" in submit_body, (
+        "Edit submit must skip `status` in the payload when the dropdown's "
+        "displayed value is unchanged — otherwise running/blocked/done/archived "
+        "tasks get silently demoted on save."
+    )
+
+    # 4. openKanbanCreate explicitly nulls the tracker (create always sends).
+    create_match = re.search(
+        r"function openKanbanCreate\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert create_match
+    create_body = create_match.group(1)
+    assert "_kanbanTaskModalInitialDisplayedStatus = null" in create_body, (
+        "openKanbanCreate must reset the tracker to null so create-mode "
+        "submits always include status in the POST payload."
+    )
+
+    # 5. closeKanbanTaskModal clears the tracker so a stale value can't leak
+    #    into the next open.
+    close_match = re.search(
+        r"function closeKanbanTaskModal\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert close_match
+    close_body = close_match.group(1)
+    assert "_kanbanTaskModalInitialDisplayedStatus = null" in close_body
+
+
+def test_kanban_assignee_dropdown_uses_select_not_freetext():
+    """Assignee must be a <select> populated from /api/profiles + board history,
+    not a free-text input. Free-text invites typos that the dispatcher silently
+    rejects (kanban_db.py:3567 "if not row[assignee]: skip"), and the dropdown
+    makes the dispatcher contract explicit.
+    """
+    # The modal markup uses <select> for assignee, with a hint span explaining
+    # the dispatcher claim contract.
+    sel_idx = INDEX.find('id="kanbanTaskModalAssignee"')
+    assert sel_idx != -1, "kanbanTaskModalAssignee element not found"
+    # Walk back to find the opening tag — it must be a <select>, not <input>.
+    start = INDEX.rfind('<', 0, sel_idx)
+    tag_open = INDEX[start:sel_idx + 60]
+    assert tag_open.startswith('<select'), (
+        f"kanbanTaskModalAssignee must be a <select> element, got: {tag_open[:80]!r}"
+    )
+
+    # Hint element exists and references the dispatcher claim contract.
+    assert 'id="kanbanTaskModalAssigneeHint"' in INDEX
+    hint_idx = INDEX.find('id="kanbanTaskModalAssigneeHint"')
+    hint_block = INDEX[hint_idx:hint_idx + 400]
+    assert "Hermes profile" in hint_block or "data-i18n=\"kanban_assignee_hint\"" in hint_block
+
+    # The populator function loads from /api/profiles and groups options.
+    pop_match = re.search(
+        r"async function _kanbanPopulateAssigneeSelect\([^)]*\)\{(.*?)\n\}",
+        PANELS, re.DOTALL,
+    )
+    assert pop_match, "_kanbanPopulateAssigneeSelect() not found"
+    pop_body = pop_match.group(1)
+    assert "_kanbanLoadProfileNames" in pop_body
+    assert "<optgroup" in pop_body
+    assert 'value=""' in pop_body, (
+        "Must include the explicit empty 'Unassigned' fallthrough option."
+    )
+
+    # Profile loader hits /api/profiles.
+    load_match = re.search(
+        r"async function _kanbanLoadProfileNames\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert load_match
+    assert "/api/profiles" in load_match.group(1)
+
+
+def test_kanban_run_dispatcher_button_exists_and_is_distinct_from_preview():
+    """The previous Kanban UI only exposed `nudgeKanbanDispatcher()` — a
+    dry-run preview that never actually spawns workers — leaving users with
+    no way to run their tasks from the WebUI. There must now be a real
+    runKanbanDispatcher() entry point AND it must call /api/kanban/dispatch
+    WITHOUT dry_run=1, and the existing nudge button must still be a dry-run.
+    """
+    # 1. runKanbanDispatcher() exists and dispatches without dry_run.
+    run_match = re.search(
+        r"async function runKanbanDispatcher\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert run_match, "runKanbanDispatcher() not found"
+    run_body = run_match.group(1)
+    assert "/api/kanban/dispatch" in run_body
+    # The real-run path must NOT contain dry_run=1.
+    assert "dry_run=1" not in run_body, (
+        "runKanbanDispatcher() must NOT pass dry_run=1 — that's the preview path."
+    )
+    # It MUST go through showConfirmDialog (not window.confirm) because it
+    # spawns workers — and the existing test_kanban_dashboard_parity_core_controls_are_native
+    # asserts no window.confirm/prompt calls in panels.js anyway.
+    assert "showConfirmDialog" in run_body, (
+        "runKanbanDispatcher() must use showConfirmDialog before spawning workers."
+    )
+
+    # 2. nudgeKanbanDispatcher() (the existing preview path) still uses dry_run=1.
+    nudge_match = re.search(
+        r"async function nudgeKanbanDispatcher\(\)\{(.*?)\n\}", PANELS, re.DOTALL
+    )
+    assert nudge_match
+    nudge_body = nudge_match.group(1)
+    assert "dry_run=1" in nudge_body, (
+        "nudgeKanbanDispatcher() must remain a dry-run preview (dry_run=1)."
+    )
+
+    # 3. The board-header has a button wired to runKanbanDispatcher().
+    assert 'id="btnKanbanRunDispatcher"' in INDEX
+    btn_idx = INDEX.find('id="btnKanbanRunDispatcher"')
+    # Search backward to the opening `<button` and forward to `</button>` to
+    # capture the full element (class= attribute precedes id= in the markup).
+    btn_start = INDEX.rfind('<button', 0, btn_idx)
+    btn_end = INDEX.find('</button>', btn_idx) + len('</button>')
+    btn_html = INDEX[btn_start:btn_end]
+    assert 'onclick="runKanbanDispatcher()"' in btn_html
+    # Distinct visual class so users can tell it apart from the preview button.
+    assert "kanban-run-dispatch-btn" in btn_html
+
+    # 4. The sidebar bulk bar also has a Run dispatcher button alongside the
+    # existing Preview button, so users in the filter pane can also run.
+    bulk_idx = INDEX.find("kanbanBulkBar")
+    bulk_html = INDEX[bulk_idx:bulk_idx + 1500]
+    assert 'onclick="runKanbanDispatcher()"' in bulk_html, (
+        "Sidebar bulk bar must also expose Run dispatcher."
+    )
+    # The dispatch result formatter exists and surfaces concrete numbers.
+    assert "function _kanbanFormatDispatchResult" in PANELS
+    fmt_match = re.search(
+        r"function _kanbanFormatDispatchResult\([^)]*\)\{(.*?)\n\}",
+        PANELS, re.DOTALL,
+    )
+    assert fmt_match
+    fmt_body = fmt_match.group(1)
+    for token in ("spawned", "skipped_unassigned", "skipped_nonspawnable", "promoted"):
+        assert token in fmt_body, f"dispatch summary missing field: {token}"
+
+
+
 def test_kanban_board_has_native_css_classes():
     for selector in (
         ".kanban-board",
